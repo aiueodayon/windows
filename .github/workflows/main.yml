@@ -13,6 +13,7 @@ jobs:
         run: |
           Write-Host "PowerShell version:" $PSVersionTable.PSVersion
 
+
       - name: 📦 Download latest Myrtille MSI
         shell: pwsh
         run: |
@@ -23,6 +24,7 @@ jobs:
           Invoke-WebRequest $asset.browser_download_url -OutFile Myrtille.msi
           Write-Host "✅ Downloaded Myrtille.msi"
 
+
       - name: 📂 Extract MSI to folder (bypass installer)
         shell: pwsh
         run: |
@@ -30,35 +32,22 @@ jobs:
           Start-Process msiexec.exe -ArgumentList '/a', (Resolve-Path Myrtille.msi), '/qn', "TARGETDIR=C:\Myrtille" -Wait
           Write-Host "✅ Myrtille extracted to C:\Myrtille"
     
-      - name: 🚀 Start Myrtille services
+
+      - name: 🚀 Start Myrtille Web + Service
         shell: pwsh
         run: |
-          $path = $env:MYRTILLE_PATH
-          $svc = Join-Path $path "Myrtille.Services.exe"
-          $web = Join-Path $path "Myrtille.Web.exe"
-
-          if (Test-Path $svc) {
-            Start-Process -FilePath $svc -NoNewWindow
-            Write-Host "Started Myrtille.Services.exe"
-          } else {
-            Write-Warning "Service exe not found at $svc"
-          }
-
-          if (Test-Path $web) {
-            Start-Process -FilePath $web -NoNewWindow
-            Write-Host "Started Myrtille.Web.exe"
-          } else {
-            Write-Warning "Web exe not found at $web"
-          }
-
-          Start-Sleep -Seconds 10
-          Write-Host "✅ Myrtille should now be running (likely on http://localhost/)"
-
+          cd C:\Myrtille
+          Start-Process -FilePath "Myrtille.Services.exe" -NoNewWindow
+          Start-Process -FilePath "Myrtille.Web.exe" -NoNewWindow
+          Write-Host "✅ Myrtille started on port 80."
+      
+      
       - name: 🌐 Download Cloudflared
         shell: pwsh
         run: |
           Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
           Write-Host "✅ Cloudflared downloaded."
+
 
       - name: ☁️ Start Cloudflare Tunnel
         shell: pwsh
