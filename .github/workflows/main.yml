@@ -23,34 +23,13 @@ jobs:
           Invoke-WebRequest $asset.browser_download_url -OutFile Myrtille.msi
           Write-Host "✅ Downloaded Myrtille.msi"
 
-      - name: ⚙️ Install Myrtille silently
+      - name: 📂 Extract MSI to folder (bypass installer)
         shell: pwsh
         run: |
-          Write-Host "Installing Myrtille..."
-          $proc = Start-Process -FilePath msiexec.exe -ArgumentList '/i', (Resolve-Path Myrtille.msi), '/qn', '/norestart' -Wait -PassThru
-          if ($proc.ExitCode -ne 0) { Write-Error "❌ Installation failed: exit code $($proc.ExitCode)"; exit $proc.ExitCode }
-          Write-Host "✅ Myrtille installed successfully."
-
-      - name: 🔍 Locate Myrtille install path
-        id: findpath
-        shell: pwsh
-        run: |
-          $candidates = @(
-            'C:\Program Files\Myrtille',
-            'C:\Program Files (x86)\Myrtille',
-            'C:\Myrtille'
-          )
-          $path = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $path) {
-            $path = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" | Where-Object { $_.DisplayName -like "*Myrtille*" } | Select-Object -ExpandProperty InstallLocation -ErrorAction SilentlyContinue)
-          }
-          if (-not $path) {
-            Write-Warning "⚠️ Myrtille install path not found."
-            exit 1
-          }
-          Write-Host "✅ Myrtille found at: $path"
-          echo "MYRTILLE_PATH=$path" >> $env:GITHUB_ENV
-
+          mkdir C:\Myrtille
+          Start-Process msiexec.exe -ArgumentList '/a', (Resolve-Path Myrtille.msi), '/qn', "TARGETDIR=C:\Myrtille" -Wait
+          Write-Host "✅ Myrtille extracted to C:\Myrtille"
+    
       - name: 🚀 Start Myrtille services
         shell: pwsh
         run: |
