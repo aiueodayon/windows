@@ -175,7 +175,6 @@ jobs:
         shell: pwsh
         run: |
           # Start an ephemeral tunnel (background) so we can capture the public URL to logs.
-          # The tunnel process will keep running while the job stays alive.
           $outFile = "$PSScriptRoot\cloudflared.out"
           $errFile = "$PSScriptRoot\cloudflared.err"
           if (Test-Path $outFile) { Remove-Item $outFile -Force }
@@ -183,7 +182,6 @@ jobs:
 
           Write-Host "Starting ephemeral cloudflared tunnel (will print an ephemeral public URL)..."
           $args = @("tunnel", "--url", "http://localhost:80", "--no-autoupdate")
-          # Start-Process with redirection so output can be read from file
           $proc = Start-Process -FilePath ".\cloudflared.exe" -ArgumentList $args -RedirectStandardOutput $outFile -RedirectStandardError $errFile -PassThru
 
           Write-Host "cloudflared started (PID: $($proc.Id)). Waiting up to 15 seconds for the public URL to appear in the log..."
@@ -194,8 +192,8 @@ jobs:
             if (Test-Path $outFile) {
               $text = Get-Content $outFile -Raw -ErrorAction SilentlyContinue
               if ($text) {
-                # try to find an https URL (trycloudflare or custom)
-                $m = [regex]::Match($text, "(https?://[^\s'\"<>]+)")
+                # fix: use a single-quoted regex literal and escape single-quote inside it by doubling
+                $m = [regex]::Match($text, '(https?://[^\s''"<>]+)')
                 if ($m.Success) { $url = $m.Value; break }
               }
             }
