@@ -12,58 +12,86 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "PowerShell version:" $PSVersionTable.PSVersion
+          Write-Host "Windows version:" (Get-ComputerInfo).WindowsProductName
 
-
+      # --- Download MSI installer from GitHub ---
       - name: 📦 Download latest Myrtille MSI
         shell: pwsh
         run: |
           $release = Invoke-RestMethod "https://api.github.com/repos/cedrozor/myrtille/releases/latest"
-          $asset = $release.assets | Where-Object { $_.name -like "*.msi" } | Select-Object -First 1
-          if (-not $asset) { Write-Error "❌ Myrtille MSI not found."; exit 1 }
+          $asset = $release.assets | Where-Object { $_.name -match "Myrtille_.*Setup\.msi" } | Select-Object -First 1
+          if (-not $asset) {
+            Write-Error "❌ Myrtille MSI not found in release."
+            exit 1
+          }
           Write-Host "Found MSI: $($asset.name)"
-          Invoke-WebRequest $asset.browser_download_url -OutFile Myrtille.msi
+          Invoke-WebRequest $asset.browser_download_url -OutFile Myrtille.msi -UseBasicParsing
           Write-Host "✅ Downloaded Myrtille.msi"
 
-
-      - name: 📂 Extract MSI to folder (bypass installer)
+      # --- Extract MSI contents into C:\Myrtille ---
+      - name: 📂 Extract MSI contents
         shell: pwsh
         run: |
-          mkdir C:\Myrtille
-          Start-Process msiexec.exe -ArgumentList '/a', (Resolve-Path Myrtille.msi), '/qn', "TARGETDIR=C:\Myrtille" -Wait
-          Write-Host "✅ Myrtille extracted to C:\Myrtille"
-    
+          $target = "C:\Myrtille"
+          if (Test-Path $target) { Remove-Item -Recurse -Force $target }
+          New-Item -ItemType Directory -Path $target | Out-Null
 
+          Start-Process msiexec.exe -ArgumentList '/a', (Resolve-Path Myrtille.msi), '/qn', "TARGETDIR=$target" -Wait
+          Write-Host "✅ Extracted to $target"
+
+          # 確認
+          Get-ChildItem -Path $target -Recurse -Filter "Myrtille.Web.exe" | ForEach-Object { Write-Host "📄 Found:" $_.FullName }
+
+      # --- Run Myrtille (auto-detect install path) ---
       - name: 🚀 Start Myrtille Web + Services
         shell: pwsh
         run: |
-          # 自動的に Myrtille.exe の場所を検索
-          $exePath = Get-ChildItem -Path "C:\Myrtille" -Recurse -Filter "Myrtille.Web.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          $searchPaths = @(
+            "C:\Myrtille",
+            "C:\Program Files\Myrtille",
+            "C:\Program Files (x86)\Myrtille"
+          )
+
+          $exePath = $null
+          foreach ($path in $searchPaths) {
+            if (Test-Path $path) {
+              $found = Get-ChildItem -Path $path -Recurse -Filter "Myrtille.Web.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($found) {
+                $exePath = $found.FullName
+                break
+              }
+            }
+          }
+
           if (-not $exePath) {
-            Write-Error "❌ Myrtille.Web.exe not found after extraction."
+            Write-Error "❌ Myrtille.Web.exe not found in any of: $($searchPaths -join ', ')"
             exit 1
           }
-            $base = Split-Path $exePath.FullName
+
+          $base = Split-Path $exePath
           Write-Host "✅ Myrtille found at: $base"
           cd $base
 
           if (Test-Path "Myrtille.Services.exe") {
             Start-Process -FilePath "Myrtille.Services.exe" -NoNewWindow
-            Write-Host "Started Myrtille.Services.exe"
+            Write-Host "🟢 Started Myrtille.Services.exe"
           } else {
             Write-Warning "⚠️ Myrtille.Services.exe not found (may not be needed)"
           }
 
           Start-Process -FilePath "Myrtille.Web.exe" -NoNewWindow
-          Write-Host "✅ Myrtille.Web.exe started (port 80 expected)"
+          Write-Host "🟢 Myrtille.Web.exe started (port 80 expected)"
+          Start-Sleep -Seconds 5
 
-      
-      
+          Write-Host "✅ Myrtille processes running:"
+          Get-Process | Where-Object { $_.ProcessName -match "Myrtille" } | Select-Object ProcessName, Id
+
+      # --- Cloudflared setup ---
       - name: 🌐 Download Cloudflared
         shell: pwsh
         run: |
           Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
           Write-Host "✅ Cloudflared downloaded."
-
 
       - name: ☁️ Start Cloudflare Tunnel
         shell: pwsh
@@ -74,10 +102,15 @@ jobs:
             Write-Error "❌ CLOUDFLARED_TOKEN secret not set. Add it in your repository settings."
             exit 1
           }
+
           Write-Host "Installing Cloudflared service..."
           .\cloudflared.exe service install $env:CLOUDFLARED_TOKEN
+
+          Write-Host "✅ Cloudflared service installed."
           Start-Sleep -Seconds 8
-          Write-Host "✅ Tunnel installation attempted. Check your Cloudflare dashboard for the active URL."
+
+          Write-Host "⚡ Checking Cloudflared process..."
+          Get-Process | Where-Object { $_.ProcessName -match "cloudflared" } | Select-Object ProcessName, Id
 
       - name: ✅ Done
         shell: pwsh
