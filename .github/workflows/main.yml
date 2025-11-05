@@ -6,6 +6,7 @@ on:
 jobs:
   deploy:
     runs-on: windows-latest
+    timeout-minutes: 300
 
     steps:
       - name: 🧰 Setup PowerShell
@@ -14,7 +15,6 @@ jobs:
           Write-Host "PowerShell version:" $PSVersionTable.PSVersion
           Write-Host "Windows version:" (Get-ComputerInfo).WindowsProductName
 
-      # --- Download MSI installer from GitHub ---
       - name: 📦 Download latest Myrtille MSI
         shell: pwsh
         run: |
@@ -28,7 +28,6 @@ jobs:
           Invoke-WebRequest $asset.browser_download_url -OutFile Myrtille.msi -UseBasicParsing
           Write-Host "✅ Downloaded Myrtille.msi"
 
-      # --- Extract MSI contents into C:\Myrtille ---
       - name: 📂 Extract MSI contents
         shell: pwsh
         run: |
@@ -39,21 +38,17 @@ jobs:
           Start-Process msiexec.exe -ArgumentList '/a', (Resolve-Path Myrtille.msi), '/qn', "TARGETDIR=$target" -Wait
           Write-Host "✅ Extracted to $target"
 
-          # 確認
           Get-ChildItem -Path $target -Recurse -Filter "Myrtille.Web.exe" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "📄 Found:" $_.FullName }
 
-      # --- Run Myrtille (auto-detect install path; robust start logic; parser fixes) ---
       - name: 🚀 Start Myrtille Web + Services
         shell: pwsh
         run: |
-          # Define search locations (common install/extract targets)
           $searchPaths = @(
             "C:\Myrtille",
             "C:\Program Files\Myrtille",
             "C:\Program Files (x86)\Myrtille"
           )
 
-          # Find an executable related to Myrtille (prefer Web, then Services, then any Myrtille*.exe)
           $exePath = $null
           foreach ($path in $searchPaths) {
             if (Test-Path $path) {
@@ -68,9 +63,8 @@ jobs:
             }
           }
 
-          # Broader fallback search on C: if nothing found yet (may take time)
           if (-not $exePath) {
-            Write-Host "🔎 Doing a broader search on C:\\ for Myrtille executables (this may take a bit)..."
+            Write-Host "🔎 Doing a broader search on C:\ for Myrtille executables (this may take a bit)..."
             try {
               $foundWeb = Get-ChildItem -Path C:\ -Recurse -Force -Filter "Myrtille.Web.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
               if ($foundWeb) { $exePath = $foundWeb.FullName }
@@ -100,10 +94,8 @@ jobs:
           if ($exePath) {
             $base = Split-Path $exePath
             Write-Host "✅ Myrtille executable found at: $exePath (base: $base)"
-            # Change to the directory so relative starts work if needed
             Push-Location $base
 
-            # Start any Services-like executables first (e.g., Myrtille.Services.exe or Myrtille.Admin.Services.exe)
             $serviceCandidates = Get-ChildItem -Path $base -Filter "*Services*.exe" -ErrorAction SilentlyContinue
             foreach ($svc in $serviceCandidates) {
               try {
@@ -119,7 +111,6 @@ jobs:
               Write-Host "ℹ️ No *Services*.exe found in $base"
             }
 
-            # Start the Web exe if present (Myrtille.Web.exe or any *Web*.exe)
             $webExe = Get-ChildItem -Path $base -Filter "Myrtille.Web.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
             if (-not $webExe) {
               $webExe = Get-ChildItem -Path $base -Filter "*Web*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -134,7 +125,6 @@ jobs:
                 Write-Warning ("⚠️ Failed to start {0}: {1}" -f $($webExe.Name), $($_))
               }
             } else {
-              # Best-effort: start the originally found exe if it wasn't a services exe and wasn't started yet
               $exeName = Split-Path $exePath -Leaf
               if (-not ($serviceCandidates | Where-Object { $_.Name -eq $exeName })) {
                 try {
@@ -153,42 +143,76 @@ jobs:
 
             Pop-Location
           } else {
-            # Do NOT exit with failure — log warning and continue so workflow can proceed to cloudflared
             Write-Warning "⚠️ Myrtille executable not found in common and broad locations. Skipping Myrtille start to avoid failing the workflow."
             Write-Host "You can inspect the runner to see where files extracted to, or adjust TARGETDIR/installer options if needed."
-
             if (Test-Path "C:\Myrtille") {
               Write-Host "Contents of C:\Myrtille (top 50 entries):"
               Get-ChildItem -Path "C:\Myrtille" -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 50 | ForEach-Object { Write-Host $_.FullName }
             }
           }
 
-      # --- Cloudflared setup ---
       - name: 🌐 Download Cloudflared
         shell: pwsh
         run: |
           Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
           Write-Host "✅ Cloudflared downloaded."
 
-      - name: ☁️ Start Cloudflare Tunnel
+      - name: ☁️ Install Cloudflared service (if token provided)
         shell: pwsh
         env:
           CLOUDFLARED_TOKEN: ${{ secrets.CLOUDFLARED_TOKEN }}
         run: |
-          if (-not $env:CLOUDFLARED_TOKEN) {
-            Write-Error "❌ CLOUDFLARED_TOKEN secret not set. Add it in your repository settings."
-            exit 1
+          if ($env:CLOUDFLARED_TOKEN) {
+            Write-Host "Installing cloudflared service (token provided)..."
+            .\cloudflared.exe service install $env:CLOUDFLARED_TOKEN
+            Write-Host "✅ Cloudflared service installed."
+            Start-Sleep -Seconds 3
+          } else {
+            Write-Host "No CLOUDFLARED_TOKEN provided; skipping service install."
           }
 
-          Write-Host "Installing Cloudflared service..."
-          .\cloudflared.exe service install $env:CLOUDFLARED_TOKEN
+      - name: ☁️ Start ephemeral Cloudflared tunnel and print public URL
+        shell: pwsh
+        run: |
+          # Start an ephemeral tunnel (background) so we can capture the public URL to logs.
+          # The tunnel process will keep running while the job stays alive.
+          $outFile = "$PSScriptRoot\cloudflared.out"
+          $errFile = "$PSScriptRoot\cloudflared.err"
+          if (Test-Path $outFile) { Remove-Item $outFile -Force }
+          if (Test-Path $errFile) { Remove-Item $errFile -Force }
 
-          Write-Host "✅ Cloudflared service installed."
-          Start-Sleep -Seconds 8
+          Write-Host "Starting ephemeral cloudflared tunnel (will print an ephemeral public URL)..."
+          $args = @("tunnel", "--url", "http://localhost:80", "--no-autoupdate")
+          # Start-Process with redirection so output can be read from file
+          $proc = Start-Process -FilePath ".\cloudflared.exe" -ArgumentList $args -RedirectStandardOutput $outFile -RedirectStandardError $errFile -PassThru
 
-          Write-Host "⚡ Checking Cloudflared process..."
-          Get-Process | Where-Object { $_.ProcessName -match "cloudflared" } | Select-Object ProcessName, Id
+          Write-Host "cloudflared started (PID: $($proc.Id)). Waiting up to 15 seconds for the public URL to appear in the log..."
+          $attempts = 15
+          $url = $null
+          for ($i = 0; $i -lt $attempts; $i++) {
+            Start-Sleep -Seconds 1
+            if (Test-Path $outFile) {
+              $text = Get-Content $outFile -Raw -ErrorAction SilentlyContinue
+              if ($text) {
+                # try to find an https URL (trycloudflare or custom)
+                $m = [regex]::Match($text, "(https?://[^\s'\"<>]+)")
+                if ($m.Success) { $url = $m.Value; break }
+              }
+            }
+          }
 
+          if ($url) {
+            Write-Host "🔗 Public URL for Myrtille (ephemeral): $url"
+            Write-Host "Open that URL in your browser and use the Myrtille web UI to start an RDP session."
+          } else {
+            Write-Warning "⚠️ Could not find public URL in cloudflared output within timeout."
+            Write-Host "---- cloudflared stdout (tail):"
+            if (Test-Path $outFile) { Get-Content $outFile -Tail 50 | ForEach-Object { Write-Host $_ } } else { Write-Host "(no stdout yet)" }
+            Write-Host "---- cloudflared stderr (tail):"
+            if (Test-Path $errFile) { Get-Content $errFile -Tail 50 | ForEach-Object { Write-Host $_ } } else { Write-Host "(no stderr yet)" }
+          }
+
+          Write-Host "Note: The ephemeral tunnel process will remain running in the background while the job is alive."
 
       - name: ⏳ Keep job alive for RDP (5 hours)
         shell: pwsh
@@ -201,7 +225,6 @@ jobs:
             Start-Sleep -Seconds 60
           }
           Write-Host "Keepalive finished."
-          
 
       - name: ✅ Done
         shell: pwsh
