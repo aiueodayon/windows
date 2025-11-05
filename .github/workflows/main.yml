@@ -13,11 +13,15 @@ jobs:
           net localgroup administrators runner /add
           Write-Host "✅ RDP enabled and user created."
 
-      - name: Download Myrtille (Web RDP)
+      - name: Download Myrtille (auto detect latest)
+        shell: pwsh
         run: |
-          Invoke-WebRequest -Uri https://github.com/cedrozor/myrtille/releases/latest/download/Myrtille.zip -OutFile Myrtille.zip
+          $release = Invoke-RestMethod "https://api.github.com/repos/cedrozor/myrtille/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -like "Myrtille-*.zip" } | Select-Object -First 1
+          if (-not $asset) { Write-Error "❌ Myrtille ZIP not found in latest release."; exit 1 }
+          Invoke-WebRequest $asset.browser_download_url -OutFile Myrtille.zip
           Expand-Archive Myrtille.zip -DestinationPath C:\Myrtille
-          Write-Host "✅ Myrtille extracted."
+          Write-Host "✅ Myrtille downloaded and extracted."
 
       - name: Start Myrtille Web + Services
         run: |
