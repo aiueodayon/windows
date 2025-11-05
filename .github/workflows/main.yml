@@ -42,7 +42,7 @@ jobs:
           # 確認
           Get-ChildItem -Path $target -Recurse -Filter "Myrtille.Web.exe" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "📄 Found:" $_.FullName }
 
-      # --- Run Myrtille (auto-detect install path; robust start logic) ---
+      # --- Run Myrtille (auto-detect install path; robust start logic; parser fixes) ---
       - name: 🚀 Start Myrtille Web + Services
         shell: pwsh
         run: |
@@ -75,7 +75,7 @@ jobs:
               $foundWeb = Get-ChildItem -Path C:\ -Recurse -Force -Filter "Myrtille.Web.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
               if ($foundWeb) { $exePath = $foundWeb.FullName }
             } catch {
-              Write-Warning "⚠️ Broad search for Myrtille.Web.exe encountered an error: $_"
+              Write-Warning ("⚠️ Broad search for Myrtille.Web.exe encountered an error: {0}" -f $($_))
             }
 
             if (-not $exePath) {
@@ -83,7 +83,7 @@ jobs:
                 $foundServices = Get-ChildItem -Path C:\ -Recurse -Force -Filter "*Services*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
                 if ($foundServices) { $exePath = $foundServices.FullName }
               } catch {
-                Write-Warning "⚠️ Broad search for *Services*.exe encountered an error: $_"
+                Write-Warning ("⚠️ Broad search for *Services*.exe encountered an error: {0}" -f $($_))
               }
             }
 
@@ -92,7 +92,7 @@ jobs:
                 $foundAny = Get-ChildItem -Path C:\ -Recurse -Force -Filter "Myrtille*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
                 if ($foundAny) { $exePath = $foundAny.FullName }
               } catch {
-                Write-Warning "⚠️ Broad search for Myrtille*.exe encountered an error: $_"
+                Write-Warning ("⚠️ Broad search for Myrtille*.exe encountered an error: {0}" -f $($_))
               }
             }
           }
@@ -111,7 +111,7 @@ jobs:
                 Start-Process -FilePath $svc.FullName -NoNewWindow -ErrorAction Stop
                 Write-Host "🟢 Started: $($svc.Name)"
               } catch {
-                Write-Warning "⚠️ Failed to start $($svc.Name): $_"
+                Write-Warning ("⚠️ Failed to start {0}: {1}" -f $($svc.Name), $($_))
               }
             }
 
@@ -131,7 +131,7 @@ jobs:
                 Start-Process -FilePath $webExe.FullName -NoNewWindow -ErrorAction Stop
                 Write-Host "🟢 Started: $($webExe.Name) (port 80 expected)"
               } catch {
-                Write-Warning "⚠️ Failed to start $($webExe.Name): $_"
+                Write-Warning ("⚠️ Failed to start {0}: {1}" -f $($webExe.Name), $($_))
               }
             } else {
               # Best-effort: start the originally found exe if it wasn't a services exe and wasn't started yet
@@ -142,7 +142,7 @@ jobs:
                   Start-Process -FilePath $exePath -NoNewWindow -ErrorAction Stop
                   Write-Host "🟡 Started (best-effort): $exeName"
                 } catch {
-                  Write-Warning "⚠️ Failed to start discovered exe $exeName: $_"
+                  Write-Warning ("⚠️ Failed to start discovered exe {0}: {1}" -f $exeName, $($_))
                 }
               }
             }
