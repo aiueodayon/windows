@@ -189,6 +189,20 @@ jobs:
           Write-Host "⚡ Checking Cloudflared process..."
           Get-Process | Where-Object { $_.ProcessName -match "cloudflared" } | Select-Object ProcessName, Id
 
+
+      - name: ⏳ Keep job alive for RDP (5 hours)
+        shell: pwsh
+        run: |
+          # 300 minutes = 5 hours
+          $minutes = 300
+          Write-Host "Keeping job alive for $minutes minutes so you can RDP/connect via Myrtille/cloudflared..."
+          for ($i = 0; $i -lt $minutes; $i++) {
+            Write-Host "$(Get-Date -Format 's') - keepalive: minute $($i + 1)/$minutes"
+            Start-Sleep -Seconds 60
+          }
+          Write-Host "Keepalive finished."
+          
+
       - name: ✅ Done
         shell: pwsh
         run: |
