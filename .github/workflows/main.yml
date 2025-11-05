@@ -40,18 +40,20 @@ jobs:
           Write-Host "✅ Extracted to $target"
 
           # 確認
-          Get-ChildItem -Path $target -Recurse -Filter "Myrtille.Web.exe" | ForEach-Object { Write-Host "📄 Found:" $_.FullName }
+          Get-ChildItem -Path $target -Recurse -Filter "Myrtille.Web.exe" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "📄 Found:" $_.FullName }
 
-      # --- Run Myrtille (auto-detect install path) ---
+      # --- Run Myrtille (auto-detect install path; improved search & fallback) ---
       - name: 🚀 Start Myrtille Web + Services
         shell: pwsh
         run: |
+          # Define search locations (common install/extract targets)
           $searchPaths = @(
             "C:\Myrtille",
             "C:\Program Files\Myrtille",
             "C:\Program Files (x86)\Myrtille"
           )
 
+          # First try: quick search in known locations
           $exePath = $null
           foreach ($path in $searchPaths) {
             if (Test-Path $path) {
@@ -63,28 +65,77 @@ jobs:
             }
           }
 
+          # Second try: look for any Myrtille*.exe (sometimes names differ) in known locations
           if (-not $exePath) {
-            Write-Error "❌ Myrtille.Web.exe not found in any of: $($searchPaths -join ', ')"
-            exit 1
+            foreach ($path in $searchPaths) {
+              if (Test-Path $path) {
+                $foundAny = Get-ChildItem -Path $path -Recurse -Filter "Myrtille*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($foundAny) {
+                  $exePath = $foundAny.FullName
+                  break
+                }
+              }
+            }
           }
 
-          $base = Split-Path $exePath
-          Write-Host "✅ Myrtille found at: $base"
-          cd $base
+          # Third try: broader search across C: (may take some time). Limit to first match.
+          if (-not $exePath) {
+            Write-Host "🔎 Doing a broader search on C:\\ for Myrtille executables (this may take a bit)..."
+            try {
+              # Search for the exact web exe first
+              $found = Get-ChildItem -Path C:\ -Recurse -Force -Filter "Myrtille.Web.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($found) { $exePath = $found.FullName }
+            } catch {
+              Write-Warning "⚠️ Broad search for Myrtille.Web.exe encountered an error: $_"
+            }
+          }
 
-          if (Test-Path "Myrtille.Services.exe") {
-            Start-Process -FilePath "Myrtille.Services.exe" -NoNewWindow
-            Write-Host "🟢 Started Myrtille.Services.exe"
+          if (-not $exePath) {
+            try {
+              # If exact web exe wasn't found, try any Myrtille*.exe across C:
+              $foundAny = Get-ChildItem -Path C:\ -Recurse -Force -Filter "Myrtille*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($foundAny) { $exePath = $foundAny.FullName }
+            } catch {
+              Write-Warning "⚠️ Broad search for Myrtille*.exe encountered an error: $_"
+            }
+          }
+
+          if ($exePath) {
+            $base = Split-Path $exePath
+            Write-Host "✅ Myrtille executable found at: $exePath (base: $base)"
+            cd $base
+
+            if (Test-Path "Myrtille.Services.exe") {
+              Start-Process -FilePath "Myrtille.Services.exe" -NoNewWindow
+              Write-Host "🟢 Started Myrtille.Services.exe"
+            } else {
+              Write-Warning "⚠️ Myrtille.Services.exe not found (may not be needed)"
+            }
+
+            # If found executable is the Web exe use it; if not, try to start any suitable exe
+            $webExe = Get-ChildItem -Path $base -Filter "Myrtille.Web.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($webExe) {
+              Start-Process -FilePath $webExe.Name -NoNewWindow
+              Write-Host "🟢 Myrtille.Web.exe started (port 80 expected)"
+            } else {
+              # Start the found exe (best-effort) if it's not the Web exe
+              Start-Process -FilePath (Split-Path $exePath -Leaf) -NoNewWindow
+              Write-Host "🟡 Started $([System.IO.Path]::GetFileName($exePath)) (best-effort)"
+            }
+
+            Start-Sleep -Seconds 5
+            Write-Host "✅ Myrtille processes running (if any):"
+            Get-Process | Where-Object { $_.ProcessName -match "Myrtille" } | Select-Object ProcessName, Id
           } else {
-            Write-Warning "⚠️ Myrtille.Services.exe not found (may not be needed)"
+            # Do NOT exit with failure — log warning and continue so workflow can proceed to cloudflared
+            Write-Warning "⚠️ Myrtille executable not found in common and broad locations. Skipping Myrtille start to avoid failing the workflow."
+            Write-Host "You can inspect the runner to see where files extracted to, or adjust TARGETDIR/installer options if needed."
+            # List top-level extracted folders for debugging
+            if (Test-Path "C:\Myrtille") {
+              Write-Host "Contents of C:\Myrtille (top 50 entries):"
+              Get-ChildItem -Path "C:\Myrtille" -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 50 | ForEach-Object { Write-Host $_.FullName }
+            }
           }
-
-          Start-Process -FilePath "Myrtille.Web.exe" -NoNewWindow
-          Write-Host "🟢 Myrtille.Web.exe started (port 80 expected)"
-          Start-Sleep -Seconds 5
-
-          Write-Host "✅ Myrtille processes running:"
-          Get-Process | Where-Object { $_.ProcessName -match "Myrtille" } | Select-Object ProcessName, Id
 
       # --- Cloudflared setup ---
       - name: 🌐 Download Cloudflared
