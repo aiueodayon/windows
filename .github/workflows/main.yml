@@ -1,37 +1,45 @@
-name: Browser RDP to Windows Server
+name: BrowserRDP
 on: workflow_dispatch
 
 jobs:
   rdp:
     runs-on: windows-latest
     steps:
-      - name: Enable RDP & create user
+      - name: Enable RDP and create user
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           net user runner Password123! /add
           net localgroup administrators runner /add
+          Write-Host "✅ RDP enabled and user created."
+
+      - name: Download Myrtille (Web RDP)
+        run: |
+          Invoke-WebRequest -Uri https://github.com/cedrozor/myrtille/releases/latest/download/Myrtille.zip -OutFile Myrtille.zip
+          Expand-Archive Myrtille.zip -DestinationPath C:\Myrtille
+          Write-Host "✅ Myrtille extracted."
+
+      - name: Start Myrtille Web + Services
+        run: |
+          cd C:\Myrtille
+          Start-Process -FilePath "C:\Myrtille\Myrtille.Services.exe"
+          Start-Process -FilePath "C:\Myrtille\Myrtille.Web.exe"
+          Write-Host "✅ Myrtille started on port 80."
 
       - name: Download Cloudflared
         shell: pwsh
         run: |
           Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
-
-      - name: Start WebRDP server via Guacamole (Docker)
-        shell: pwsh
-        run: |
-          choco install docker-desktop -y
-          Start-Sleep -Seconds 10
-          Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-          Start-Sleep -Seconds 30
-
-          docker run -d -p 8080:8080 oznu/guacamole
+          Write-Host "✅ Cloudflared downloaded."
 
       - name: Start Cloudflare Tunnel
         env:
           CLOUDFLARED_TOKEN: ${{ secrets.CLOUDFLARED_TOKEN }}
         shell: pwsh
         run: |
-          Start-Process -NoNewWindow -FilePath .\cloudflared.exe -ArgumentList "access tcp --url localhost:8080 --name github-rdp --no-autoupdate"
+          .\cloudflared.exe service install $env:CLOUDFLARED_TOKEN
           Start-Sleep -Seconds 10
-          Write-Host "Your tunnel should now be active. Check your Cloudflare dashboard for the public URL."
+          Write-Host "🌐 Tunnel started — open your Cloudflare dashboard to get the public URL."
+          Write-Host "🪟 Then log in via Myrtille (browser RDP gateway)."
+          Write-Host "User: runner / Password: Password123!"
+          Write-Host "⚠️ The session will expire when the job ends (max ~6h)."
