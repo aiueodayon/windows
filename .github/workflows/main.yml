@@ -1,71 +1,101 @@
-- name: Download Myrtille MSI (auto detect latest)
-  shell: pwsh
-  run: |
-    # GitHub Releases API から最新リリースの資産を取得して *.msi を探す
-    $release = Invoke-RestMethod "https://api.github.com/repos/cedrozor/myrtille/releases/latest"
-    $asset = $release.assets | Where-Object { $_.name -like "*.msi" } | Select-Object -First 1
-    if (-not $asset) { Write-Error "❌ Myrtille MSI not found in latest release."; exit 1 }
-    Write-Host "Found MSI: $($asset.name)"
-    Invoke-WebRequest $asset.browser_download_url -OutFile Myrtille.msi
+name: Myrtille Cloudflare Tunnel
 
-- name: Install Myrtille MSI (silent)
-  shell: pwsh
-  run: |
-    # サイレントインストール（終了コードを確認）
-    $exit = Start-Process -FilePath msiexec.exe -ArgumentList '/i', (Resolve-Path Myrtille.msi), '/qn', '/norestart' -Wait -PassThru
-    if ($exit.ExitCode -ne 0) { Write-Error "❌ msiexec failed with exit code $($exit.ExitCode)"; exit $exit.ExitCode }
-    Write-Host "✅ Myrtille MSI installed (exit $($exit.ExitCode))."
+on:
+  workflow_dispatch:
 
-- name: Find Myrtille install path & start services
-  shell: pwsh
-  run: |
-    # よくあるインストール先候補をチェックして実行バイナリを探す
-    $candidates = @(
-      'C:\Program Files\Myrtille',
-      'C:\Program Files (x86)\Myrtille',
-      'C:\Myrtille'
-    )
-    $installed = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $installed) {
-      # MSI が別パスに入った可能性がある -> MSI のプロパティを読んでみる
-      $installed = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" | Where-Object { $_.DisplayName -like "*Myrtille*" } | Select-Object -First 1).InstallLocation
-    }
-    if (-not $installed) {
-      Write-Warning "⚠️ Myrtille install path not found automatically. Listing C:\\ for troubleshooting."
-      Get-ChildItem -Path C:\ -Directory -Depth 2 | Where-Object Name -like "*Myrtille*"
-      exit 0
-    }
-    Write-Host "Myrtille detected at: $installed"
+jobs:
+  deploy:
+    runs-on: windows-latest
 
-    # サービス／実行ファイルを起動
-    $svc = Join-Path $installed "Myrtille.Services.exe"
-    $web = Join-Path $installed "Myrtille.Web.exe"
+    steps:
+      - name: 🧰 Setup PowerShell
+        shell: pwsh
+        run: |
+          Write-Host "PowerShell version:" $PSVersionTable.PSVersion
 
-    if (Test-Path $svc) {
-      Start-Process -FilePath $svc -NoNewWindow -PassThru | Out-Null
-      Write-Host "Started Myrtille.Services.exe"
-    } else {
-      Write-Warning "Myrtille.Services.exe not found at $svc"
-    }
+      - name: 📦 Download latest Myrtille MSI
+        shell: pwsh
+        run: |
+          $release = Invoke-RestMethod "https://api.github.com/repos/cedrozor/myrtille/releases/latest"
+          $asset = $release.assets | Where-Object { $_.name -like "*.msi" } | Select-Object -First 1
+          if (-not $asset) { Write-Error "❌ Myrtille MSI not found."; exit 1 }
+          Write-Host "Found MSI: $($asset.name)"
+          Invoke-WebRequest $asset.browser_download_url -OutFile Myrtille.msi
+          Write-Host "✅ Downloaded Myrtille.msi"
 
-    if (Test-Path $web) {
-      Start-Process -FilePath $web -NoNewWindow -PassThru | Out-Null
-      Write-Host "Started Myrtille.Web.exe"
-    } else {
-      Write-Warning "Myrtille.Web.exe not found at $web"
-    }
+      - name: ⚙️ Install Myrtille silently
+        shell: pwsh
+        run: |
+          Write-Host "Installing Myrtille..."
+          $proc = Start-Process -FilePath msiexec.exe -ArgumentList '/i', (Resolve-Path Myrtille.msi), '/qn', '/norestart' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { Write-Error "❌ Installation failed: exit code $($proc.ExitCode)"; exit $proc.ExitCode }
+          Write-Host "✅ Myrtille installed successfully."
 
-- name: Download Cloudflared
-  shell: pwsh
-  run: |
-    Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
-    Write-Host "✅ Cloudflared downloaded."
+      - name: 🔍 Locate Myrtille install path
+        id: findpath
+        shell: pwsh
+        run: |
+          $candidates = @(
+            'C:\Program Files\Myrtille',
+            'C:\Program Files (x86)\Myrtille',
+            'C:\Myrtille'
+          )
+          $path = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $path) {
+            $path = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" | Where-Object { $_.DisplayName -like "*Myrtille*" } | Select-Object -ExpandProperty InstallLocation -ErrorAction SilentlyContinue)
+          }
+          if (-not $path) {
+            Write-Warning "⚠️ Myrtille install path not found."
+            exit 1
+          }
+          Write-Host "✅ Myrtille found at: $path"
+          echo "MYRTILLE_PATH=$path" >> $env:GITHUB_ENV
 
-- name: Start Cloudflare Tunnel
-  env:
-    CLOUDFLARED_TOKEN: ${{ secrets.CLOUDFLARED_TOKEN }}
-  shell: pwsh
-  run: |
-    .\cloudflared.exe service install $env:CLOUDFLARED_TOKEN
-    Start-Sleep -Seconds 8
-    Write-Host "🌐 Tunnel attempted to start. Check Cloudflare Tunnels dashboard for the public URL."
+      - name: 🚀 Start Myrtille services
+        shell: pwsh
+        run: |
+          $path = $env:MYRTILLE_PATH
+          $svc = Join-Path $path "Myrtille.Services.exe"
+          $web = Join-Path $path "Myrtille.Web.exe"
+
+          if (Test-Path $svc) {
+            Start-Process -FilePath $svc -NoNewWindow
+            Write-Host "Started Myrtille.Services.exe"
+          } else {
+            Write-Warning "Service exe not found at $svc"
+          }
+
+          if (Test-Path $web) {
+            Start-Process -FilePath $web -NoNewWindow
+            Write-Host "Started Myrtille.Web.exe"
+          } else {
+            Write-Warning "Web exe not found at $web"
+          }
+
+          Start-Sleep -Seconds 10
+          Write-Host "✅ Myrtille should now be running (likely on http://localhost/)"
+
+      - name: 🌐 Download Cloudflared
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
+          Write-Host "✅ Cloudflared downloaded."
+
+      - name: ☁️ Start Cloudflare Tunnel
+        shell: pwsh
+        env:
+          CLOUDFLARED_TOKEN: ${{ secrets.CLOUDFLARED_TOKEN }}
+        run: |
+          if (-not $env:CLOUDFLARED_TOKEN) {
+            Write-Error "❌ CLOUDFLARED_TOKEN secret not set. Add it in your repository settings."
+            exit 1
+          }
+          Write-Host "Installing Cloudflared service..."
+          .\cloudflared.exe service install $env:CLOUDFLARED_TOKEN
+          Start-Sleep -Seconds 8
+          Write-Host "✅ Tunnel installation attempted. Check your Cloudflare dashboard for the active URL."
+
+      - name: ✅ Done
+        shell: pwsh
+        run: |
+          Write-Host "🎉 Myrtille + Cloudflare tunnel setup complete!"
