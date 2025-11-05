@@ -33,13 +33,29 @@ jobs:
           Write-Host "✅ Myrtille extracted to C:\Myrtille"
     
 
-      - name: 🚀 Start Myrtille Web + Service
+      - name: 🚀 Start Myrtille Web + Services
         shell: pwsh
         run: |
-          cd C:\Myrtille
-          Start-Process -FilePath "Myrtille.Services.exe" -NoNewWindow
+          # 自動的に Myrtille.exe の場所を検索
+          $exePath = Get-ChildItem -Path "C:\Myrtille" -Recurse -Filter "Myrtille.Web.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exePath) {
+            Write-Error "❌ Myrtille.Web.exe not found after extraction."
+            exit 1
+          }
+            $base = Split-Path $exePath.FullName
+          Write-Host "✅ Myrtille found at: $base"
+          cd $base
+
+          if (Test-Path "Myrtille.Services.exe") {
+            Start-Process -FilePath "Myrtille.Services.exe" -NoNewWindow
+            Write-Host "Started Myrtille.Services.exe"
+          } else {
+            Write-Warning "⚠️ Myrtille.Services.exe not found (may not be needed)"
+          }
+
           Start-Process -FilePath "Myrtille.Web.exe" -NoNewWindow
-          Write-Host "✅ Myrtille started on port 80."
+          Write-Host "✅ Myrtille.Web.exe started (port 80 expected)"
+
       
       
       - name: 🌐 Download Cloudflared
